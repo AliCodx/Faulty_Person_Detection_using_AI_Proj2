@@ -256,6 +256,9 @@ class Database:
             (limit,),
         ).fetchall()
 
+    def close(self):
+        self.conn.close()
+
     def _row_to_person(self, row):
         person = dict(row)
         person["embedding"] = self._deserialize_embedding(
