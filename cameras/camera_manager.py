@@ -15,6 +15,7 @@ class CameraManager:
         prefer_external_cameras=True,
         builtin_camera_index=0,
     ):
+        self.configured_sources = list(sources)
         self.caps = {}
         self.failed_sources = []
         self.backend = backend
@@ -37,10 +38,16 @@ class CameraManager:
                 if cap is not None:
                     cap.release()
 
-        if not self.caps and self.auto_discover:
+        if self.auto_discover and self._should_auto_discover():
             self._auto_discover_sources()
 
         self._apply_source_selection()
+
+    def _should_auto_discover(self):
+        if not self.configured_sources:
+            return True
+
+        return any(isinstance(source, int) for source in self.configured_sources)
 
     def _backend_candidates(self, source):
         if not isinstance(source, int):
