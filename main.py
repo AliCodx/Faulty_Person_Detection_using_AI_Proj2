@@ -12,9 +12,18 @@ from config import (
     CAMERA_SCAN_MAX_INDEX,
     CAMERA_WARMUP_FRAMES,
     DB_NAME,
+    DUPLICATE_MERGE_THRESHOLD,
+    FAULTY_MATCH_BOOST,
+    ID_SWITCH_MARGIN,
     MAX_ACTIVE_CAMERAS,
     PREFER_EXTERNAL_CAMERAS,
+    RECENT_CROSS_CAMERA_SECONDS,
+    RECENT_MATCH_BOOST,
     REID_THRESHOLD,
+    TRACK_STICKINESS_THRESHOLD,
+    TRACKER_IOU_THRESHOLD,
+    TRACKER_MAX_MISSED,
+    MODEL_NAME,
 )
 from core.system import TrackingSystem
 from db.database import Database
@@ -67,9 +76,26 @@ def run():
     registry = Registry(db)
 
     detector = YoloDetector()
-    extractor = FeatureExtractor()
-    id_manager = IDManager(registry, threshold=REID_THRESHOLD)
-    system = TrackingSystem(detector, extractor, id_manager, registry, db)
+    extractor = FeatureExtractor(model_name=MODEL_NAME)
+    id_manager = IDManager(
+        registry,
+        threshold=REID_THRESHOLD,
+        track_stickiness_threshold=TRACK_STICKINESS_THRESHOLD,
+        faulty_match_boost=FAULTY_MATCH_BOOST,
+        recent_cross_camera_seconds=RECENT_CROSS_CAMERA_SECONDS,
+        recent_match_boost=RECENT_MATCH_BOOST,
+        id_switch_margin=ID_SWITCH_MARGIN,
+        duplicate_merge_threshold=DUPLICATE_MERGE_THRESHOLD,
+    )
+    system = TrackingSystem(
+        detector,
+        extractor,
+        id_manager,
+        registry,
+        db,
+        tracker_iou_threshold=TRACKER_IOU_THRESHOLD,
+        tracker_max_missed=TRACKER_MAX_MISSED,
+    )
     click_handler = ClickHandler(registry)
 
     cams = CameraManager(
@@ -91,7 +117,11 @@ def run():
         print("[INFO] Active camera sources:")
         for source in active_sources:
             print(f"  - source {source} via {cams.backend_for_source(source)}")
-        if PREFER_EXTERNAL_CAMERAS and len(active_sources) == MAX_ACTIVE_CAMERAS:
+        if (
+            PREFER_EXTERNAL_CAMERAS
+            and BUILTIN_CAMERA_INDEX not in active_sources
+            and len(active_sources) == MAX_ACTIVE_CAMERAS
+        ):
             print(
                 f"[INFO] Using up to {MAX_ACTIVE_CAMERAS} cameras and skipping built-in camera "
                 f"index {BUILTIN_CAMERA_INDEX} when enough other cameras are available."

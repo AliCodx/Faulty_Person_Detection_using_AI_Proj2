@@ -1,21 +1,15 @@
-# core/tracker.py
-
-import numpy as np
-
 class Tracker:
     """
-    Simple IOU-based tracker (lightweight production baseline).
-    Can later be replaced with DeepSORT or ByteTrack.
+    Simple IOU-based tracker with stale-track cleanup.
+    Keeps detections stable within the same camera view.
     """
 
-    def __init__(self, iou_threshold=0.3):
+    def __init__(self, iou_threshold=0.3, max_missed=15):
         self.iou_threshold = iou_threshold
-        self.tracks = {}   # id -> bbox
+        self.max_missed = max_missed
+        self.tracks = {}   # id -> {"box": bbox, "missed": int}
         self.next_id = 0
 
-    # -----------------------------
-    # IOU CALCULATION
-    # -----------------------------
     def iou(self, box1, box2):
         x1, y1, x2, y2 = box1
         x1p, y1p, x2p, y2p = box2
@@ -37,41 +31,50 @@ class Tracker:
 
         return inter_area / union
 
-    # -----------------------------
-    # MAIN UPDATE FUNCTION
-    # -----------------------------
     def update(self, detections):
-        """
-        detections: list of bounding boxes
-        returns: list of (track_id, box)
-        """
+        detections = [tuple(box) for box in detections]
+        assigned_tracks = {}
+        matched_tracks = set()
+        matched_detections = set()
 
-        assigned_tracks = []
-        used_tracks = set()
+        candidates = []
+        for det_idx, box in enumerate(detections):
+            for tid, track in self.tracks.items():
+                score = self.iou(box, track["box"])
+                if score >= self.iou_threshold:
+                    candidates.append((score, det_idx, tid))
 
-        for box in detections:
-            best_id = None
-            best_iou = 0
+        candidates.sort(reverse=True)
 
-            # match with existing tracks
-            for tid, tbox in self.tracks.items():
-                if tid in used_tracks:
-                    continue
+        for score, det_idx, tid in candidates:
+            if det_idx in matched_detections or tid in matched_tracks:
+                continue
 
-                score = self.iou(box, tbox)
+            matched_detections.add(det_idx)
+            matched_tracks.add(tid)
+            assigned_tracks[det_idx] = tid
+            self.tracks[tid]["box"] = detections[det_idx]
+            self.tracks[tid]["missed"] = 0
 
-                if score > best_iou and score > self.iou_threshold:
-                    best_iou = score
-                    best_id = tid
+        for tid, track in list(self.tracks.items()):
+            if tid not in matched_tracks:
+                track["missed"] += 1
 
-            # assign ID
-            if best_id is None:
-                best_id = f"T{self.next_id}"
+        results = []
+        for det_idx, box in enumerate(detections):
+            if det_idx not in assigned_tracks:
+                tid = f"T{self.next_id}"
                 self.next_id += 1
+                self.tracks[tid] = {"box": box, "missed": 0}
+                assigned_tracks[det_idx] = tid
+            results.append((assigned_tracks[det_idx], box))
 
-            self.tracks[best_id] = box
-            used_tracks.add(best_id)
+        stale_ids = [
+            tid
+            for tid, track in self.tracks.items()
+            if track["missed"] > self.max_missed
+        ]
+        for tid in stale_ids:
+            del self.tracks[tid]
 
-            assigned_tracks.append((best_id, box))
-
-        return assigned_tracks
+        return results

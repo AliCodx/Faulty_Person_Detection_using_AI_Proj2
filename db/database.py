@@ -131,6 +131,14 @@ class Database:
 
         return vector
 
+    def _parse_timestamp(self, value):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+
     def upsert_person(
         self,
         pid,
@@ -255,6 +263,64 @@ class Database:
             "SELECT * FROM events ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
+
+    def merge_persons(self, source_pid, target_pid):
+        if source_pid == target_pid:
+            return
+
+        source = self.get_person(source_pid)
+        target = self.get_person(target_pid)
+        if source is None or target is None:
+            return
+
+        source_first = self._parse_timestamp(source["first_seen"])
+        target_first = self._parse_timestamp(target["first_seen"])
+        source_last = self._parse_timestamp(source["last_seen"])
+        target_last = self._parse_timestamp(target["last_seen"])
+
+        first_seen = source["first_seen"]
+        if target_first and (source_first is None or target_first <= source_first):
+            first_seen = target["first_seen"]
+
+        last_seen = target["last_seen"]
+        last_camera = target["last_camera"]
+        if source_last and (target_last is None or source_last > target_last):
+            last_seen = source["last_seen"]
+            last_camera = source["last_camera"]
+
+        merged_faulty = bool(source["is_faulty"]) or bool(target["is_faulty"])
+        merged_note = target["note"] or source["note"] or ""
+        merged_sightings = int(source["sightings"] or 0) + int(target["sightings"] or 0)
+        merged_snapshot = target["snapshot"] if target["snapshot"] is not None else source["snapshot"]
+        merged_embedding = target["embedding"] if target["embedding"] is not None else source["embedding"]
+        embedding_blob, embedding_dim = self._serialize_embedding(merged_embedding)
+
+        self.conn.execute(
+            """
+            UPDATE persons
+            SET embedding = ?, embedding_dim = ?, is_faulty = ?, note = ?,
+                first_seen = ?, last_seen = ?, last_camera = ?, sightings = ?, snapshot = ?
+            WHERE id = ?
+            """,
+            (
+                embedding_blob,
+                embedding_dim,
+                int(merged_faulty),
+                merged_note,
+                first_seen,
+                last_seen,
+                last_camera,
+                merged_sightings,
+                merged_snapshot,
+                target_pid,
+            ),
+        )
+        self.conn.execute(
+            "UPDATE events SET person_id = ? WHERE person_id = ?",
+            (target_pid, source_pid),
+        )
+        self.conn.execute("DELETE FROM persons WHERE id = ?", (source_pid,))
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
